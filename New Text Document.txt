@@ -1,0 +1,41 @@
+pass one of ledge detector detect rigidbody **DONT NEED YET*
+pass 3 of ledge detector cast up onto object on top **DONE**
+during air vault have bottom hitbox come down sooner  **DONE**
+-0.1 on trying to airvault up something it cant reach **DONE****DONE**
+On aur vault and normal vault lower hitbox too high each time  **DONE****DONE**
+
+
+make crouch into slide only on press not auto crouch **DONE******
+
+%%%%%%%%%%%%REFACTOR VAULT CHECK TO MAKE FASTER%%%%%%%%%   ??????
+
+ALL VAULTTOCROUCH CROUCHTOCROUCHBUGS  ****done****
+make vaultinto crouch mostly step up and not jump  ***done***
+check max vault into crouch ****seespaintgraph****
+bug vault into crouch hit head bounce back ****done****
+
+aircrouch - > jump tucktuck *****done*****
+
+standing to crouch bugs  ****done*** ***again see paintgraph****
+
+treat steep objects like wall *****done*****
+
+recrouching tuck loop when jumping shouldntwork *****done*****
+
+VAULTTOSTEEP
+vaultonto steep objects
+
+airvaulttocrouch
+
+AUTOSTEP crouching and standing
+for steps not tall enough for vault auto step (>0.15 <0.3 
+
+sprint to button and walk to other button
+
+climb 1.7+
+
+LEAN
+
+remove slide??
+
+sliding into space you cant crouch

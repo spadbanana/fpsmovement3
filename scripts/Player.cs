@@ -1,6 +1,5 @@
 using Godot;
 using System;
-using System.Data;
 
 public partial class Player : CharacterBody3D
 {	
@@ -21,19 +20,24 @@ public partial class Player : CharacterBody3D
 	private ShapeCast3D standingShapeCast;
 	private ShapeCast3D crouchingShapeCast;
 
+	private RayCast3D upLedgeRayCast;
+	private Marker3D upLedgeIndicator;
+
 	private ShapeCast3D wallShapeCast;
 	private Marker3D wallIndicator;
 
-	private float rotationPitch = 0.0f; //MOUSEMOVEMENT HANDLER
-	private float rotationYaw = 0.0f;
-	public float mouseSensitivity = 0.001f;
-	public float pitchClamp = Mathf.Pi/2;
-	public float yawClamp = 0.0f;
+
+	private float lookRotationPitch = 0.0f; //MOUSEMOVEMENT HANDLER
+	private float lookRotationYaw = 0.0f;
+	public float lookMouseSensitivity = 0.001f;
+	public float lookPitchClamp = Mathf.Pi/2;
+	public float lookYawClamp = 0.0f;
 
 	private readonly StateMachine movementMachine = new(); //STATEMACHINES
 	public State runningState { get; private set; }
 	public State crouchingState { get; private set; }
 	public State slidingState { get; private set; }
+	public State tuckingState {get; private set;}
 	public State walkingState { get; private set; }
 	public State sprintingState { get; private set; }
 
@@ -96,6 +100,7 @@ public partial class Player : CharacterBody3D
 	public float laddMovementMachineSpeedSprintSpeed = 0.5f;
 
 	private Vector2 groundVelocity = Vector2.Zero;
+	private float groundSpeedSquared = 0f;
 
 	private float fallgravity = ProjectSettings.GetSetting("physics/3d/default_gravity").AsSingle();
 	private float fallRatio = 2.0f;
@@ -108,6 +113,9 @@ public partial class Player : CharacterBody3D
 	public float lerpMovementBoost = 1f;
 	private Vector3 movementBoost = Vector3.Zero;
 
+	public float verticalDistanceJumped = 0f;
+	public float startingJumpPosition = 0f;
+
 	public float pertubateRatio = 0.15f;
 	private Vector3 pertubateMovement = Vector3.Zero;
 	private float headBobbingCurrentSpeed = 22f;
@@ -118,29 +126,37 @@ public partial class Player : CharacterBody3D
 	private float sprintingRunningDifference = 0f;
 
 	private Vector3 wallHit = Vector3.Zero;
+
+	private Vector3 wallHitNormal = Vector3.Zero;
+	private float wallHitNormalSteepness = 0f;
 	private int collisionCount = 0;
 	private Vector3 ledgeHit = Vector3.Zero;
 	private Basis rotatedInputBasis = Basis.Identity;
 	private float ledgeDetectorTolerance = 0.05f;
 
+	private Vector3 upLedgeHit = Vector3.Zero;
+	private float upLedgeGap = 0f;
+
 	private float stepHeight = 0f;
 	private float ledgeDistance = 0f;
 	private Vector3 ledgeDirection = Vector3.Zero;
-	private float vaultMin = 0.25f;
+	private float vaultMin = 0.35f;
 	private float vaultMax = 1.15f;
+	private float airVaultMax = 0.65f;
 	private Vector3 vaultStoredRotatedLerp = Vector3.Zero;
 	private Vector3 vaultStoredInputDirection = Vector3.Zero;
-	public float vaultJumpHeight = 0.15f;
+	public float vaultJumpHeight = 0f;
 	private float vaultStepUpTolerance = 0.1f;
 	private bool vaultingFreezeMovementMachine = false;
 
-	private float airVaultFallingMax = 0f;
+	private float airVaultFallingMax = -3f;
 
 	private bool neckPivotTransformUpdated = true;
 	private Transform3D previousNeckPivotDesiredPosition = Transform3D.Identity;
 	private Transform3D currentNeckPivotDesiredPosition = Transform3D.Identity;
 
-	
+	private double time = 0;
+
 	public override void _Ready()
 	{
 		Input.MouseMode = Input.MouseModeEnum.Captured;
@@ -162,23 +178,27 @@ public partial class Player : CharacterBody3D
 		standingShapeCast = GetNode<ShapeCast3D>("LedgeDetector/StandingShapeCast");
 		crouchingShapeCast = GetNode<ShapeCast3D>("LedgeDetector/CrouchingShapeCast");
 
+		upLedgeRayCast = GetNode<RayCast3D>("LedgeDetector/UpLedgeRayCast");
+		upLedgeIndicator = GetNode<Marker3D>("LedgeDetector/UpLedgeRayCast/UpLedgeIndicator");
+
 		wallShapeCast = GetNode<ShapeCast3D>("WallShapeCast");
 		wallIndicator = GetNode<Marker3D>("WallShapeCast/WallIndicator");
 
 		runningState = movementMachine.CreateState(UpdateRunning, OnEnterRunning, null, "running");
 		crouchingState = movementMachine.CreateState(UpdateCrouching, OnEnterCrouching, null, "crouching");
 		slidingState = movementMachine.CreateState(UpdateSliding, OnEnterSliding, OnExitSliding, "sliding");
+		tuckingState = movementMachine.CreateState(UpdateTucking, OnEnterTucking, null, "tucking");
 		walkingState = movementMachine.CreateState(UpdateWalking, OnEnterWalking, null, "walking");
 		sprintingState = movementMachine.CreateState(UpdateSprinting, OnEnterSprinting, null, "sprinting");
 
 		fallingState = jumpingMachine.CreateState(UpdateFalling, OnEnterFalling, null, "falling");
 		landedState = jumpingMachine.CreateState(UpdateLanded, OnEnterLanded, null, "landed");
-		jumpingState = jumpingMachine.CreateState(UpdateJumping, OnEnterJumping, null, "jumping");
+		jumpingState = jumpingMachine.CreateState(UpdateJumping, OnEnterJumping, OnExitJumping, "jumping");
 
 		notVaultingState = vaultingMachine.CreateState(null, null, null, "notVaulting");
 		vaultingStandingToStandingState = vaultingMachine.CreateState(UpdateVaultingStandingToStanding, OnEnterVaultingStandingToStanding, OnExitVaultingStandingToStanding, "vaultingStandingToStanding");
-		vaultingStandingToCrouchingState = vaultingMachine.CreateState(UpdateVaultingStandingToCrouching, OnEnterStandingToCrouching, OnExitStandingToCrouching, "vaultingStandingToCrouching");
-		vaultingCrouchingToCrouchingState = vaultingMachine.CreateState(UpdateVaultingCrouchingToCrouching, OnEnterCrouchingToCrouching, OnExitCrouchingToCrouching, "vaultingCrouchingToCrouching");
+		vaultingStandingToCrouchingState = vaultingMachine.CreateState(UpdateVaultingStandingToCrouching, OnEnterVaultingStandingToCrouching, OnExitVaultingStandingToCrouching, "vaultingStandingToCrouching");
+		vaultingCrouchingToCrouchingState = vaultingMachine.CreateState(UpdateVaultingCrouchingToCrouching, OnEnterVaultingCrouchingToCrouching, OnExitVaultingCrouchingToCrouching, "vaultingCrouchingToCrouching");
 		airVaulting = vaultingMachine.CreateState(UpdateAirVaulting, OnEnterAirVaulting, OnExitAirVaulting, "airVaulting");
 		
 		movementMachine.SetState(runningState);
@@ -194,25 +214,25 @@ public partial class Player : CharacterBody3D
     {
 		if (@event is InputEventMouseMotion inputEventMouseMotion)
 		{
-			rotationYaw -= inputEventMouseMotion.Relative.X * mouseSensitivity;
+			lookRotationYaw -= inputEventMouseMotion.Relative.X * lookMouseSensitivity;
 
-			if(yawClamp != 0)
+			if(lookYawClamp != 0)
 			{
-				rotationYaw = Mathf.Clamp(rotationYaw, -yawClamp * (Mathf.Pi/180), yawClamp * (Mathf.Pi/180));
+				lookRotationYaw = Mathf.Clamp(lookRotationYaw, -lookYawClamp * (Mathf.Pi/180), lookYawClamp * (Mathf.Pi/180));
 			}
 
 			var playerTransform = Transform;
 			playerTransform.Basis = Basis.Identity;
-			playerTransform.Basis = new Basis(Vector3.Up, rotationYaw) * playerTransform.Basis;
+			playerTransform.Basis = new Basis(Vector3.Up, lookRotationYaw) * playerTransform.Basis;
 			Transform = playerTransform;
 
-			rotationPitch -= inputEventMouseMotion.Relative.Y * mouseSensitivity;
+			lookRotationPitch -= inputEventMouseMotion.Relative.Y * lookMouseSensitivity;
 
-			rotationPitch = Mathf.Clamp(rotationPitch , -pitchClamp, pitchClamp);
+			lookRotationPitch = Mathf.Clamp(lookRotationPitch , -lookPitchClamp, lookPitchClamp);
 			
 			var headPivotTransform = headPivot.Transform;
 			headPivotTransform.Basis = Basis.Identity;
-			headPivotTransform.Basis = new Basis(Vector3.Right, rotationPitch) * headPivotTransform.Basis;
+			headPivotTransform.Basis = new Basis(Vector3.Right, lookRotationPitch) * headPivotTransform.Basis;
 			headPivot.Transform = headPivotTransform;
 		}
     }
@@ -240,20 +260,23 @@ public partial class Player : CharacterBody3D
 
 		SetVelocity();
 
-		GD.Print(movementMachine.CurrentState());
-		GD.Print(jumpingMachine.CurrentState());
-		GD.Print(vaultingMachine.CurrentState());
-		//GD.Print(lowerCollisionShape.Position);
-		//GD.Print(upperCollisionShape.Position);
-		//GD.Print(lowerCollisionShapeDesiredPosition);
-		//GD.Print(upperCollisionShapeDesiredPosition);
-		GD.Print(Velocity.Y);
+		this.RemoveLabels();
+
+		this.UpdateDebugLabel(movementMachine.CurrentState());
+		this.UpdateDebugLabel(jumpingMachine.CurrentState());
+		this.UpdateDebugLabel(vaultingMachine.CurrentState());
+		this.UpdateDebugLabel(string.Format("fall{0}",Velocity.Y));
+		this.UpdateDebugLabel(string.Format("upperpos{0}",upperCollisionShape.Position.Y));
+		this.UpdateDebugLabel(string.Format("lowerpos{0}",lowerCollisionShape.Position.Y));
+		this.UpdateDebugLabel(vaultDetectionMode.ToString());
+		this.UpdateDebugLabel(wallHitNormalSteepness.ToString());
 
 		MoveAndSlide();
 		LedgeDetection();
 		ClearStoredInputForNextPhysicsProcess();
 	}
 
+	
 	public void StoredInputForNextPhysicsProcess()
 	{
 		if (Input.IsActionJustPressed("jump") && jumpingMachine.CurrentState() == "landed" && vaultingMachine.CurrentState() == "notVaulting")
@@ -291,6 +314,7 @@ public partial class Player : CharacterBody3D
 	{
 		lastVelocity = Velocity;
 		groundVelocity = new(Velocity.X , Velocity.Z);
+		groundSpeedSquared = groundVelocity.LengthSquared();
 	}
 	public void SetMovementMode()
 	{
@@ -299,24 +323,32 @@ public partial class Player : CharacterBody3D
 			return;
 		}
 		
-		if (crouchNextPhysicsProcess || headShapeCast.IsColliding())
+		if (crouchNextPhysicsProcess)
 		{
-			if(groundVelocity.LengthSquared() > 18 && jumpingMachine.CurrentState() == "landed")
+			if (groundSpeedSquared > 18 && jumpingMachine.CurrentState() == "landed")
 			{
 				movementMachine.SetStateIfNotCurrentState(slidingState);
+			}
+			else if (jumpingMachine.CurrentState() != "landed" && movementMachine.CurrentState() != "crouching" && movementMachine.PreviousState() != "sliding")
+			{
+				movementMachine.SetStateIfNotCurrentState(tuckingState);
 			}
 			else
 			{
 				movementMachine.SetStateIfNotCurrentState(crouchingState);
 			}
 		}
-		else if (!headShapeCast.IsColliding())
+		else if (headShapeCast.IsColliding())
+		{
+			movementMachine.SetStateIfNotCurrentState(crouchingState);
+		}
+		else 
 		{
 			if (Input.IsActionPressed("walk"))
 			{
 				movementMachine.SetStateIfNotCurrentState(walkingState);
 			}
-			else if (groundVelocity.LengthSquared() > 24.9 && inputDirNorm == Vector3.Forward)
+			else if (groundSpeedSquared > 24.9 && inputDirNorm == Vector3.Forward)
 			{
 				movementMachine.SetStateIfNotCurrentState(sprintingState);
 			}
@@ -328,9 +360,17 @@ public partial class Player : CharacterBody3D
 	}
 	public void SetVaultingMode()
 	{
-		if (vaultingMachine.CurrentState() != "notVaulting" || movementMachine.CurrentState() == "sliding")
+		// if(!jumpNextPhysicsProcess || !airJumpNextPhysicsProcess)
+		// {
+		// 	return;
+		// }
+		if (vaultingMachine.CurrentState() != "notVaulting")
 		{
 			return;			
+		}
+		if (movementMachine.CurrentState() == "sliding" || movementMachine.CurrentState() == "tucking")
+		{
+			return;
 		}
 		if (inputDir == new Vector2(0,1) || inputDir == new Vector2(-1,1) || inputDir == new Vector2(1,1) || inputDir == new Vector2(-1,0) || inputDir == new Vector2(1,0))
 		{
@@ -340,23 +380,31 @@ public partial class Player : CharacterBody3D
 		{
 			return;
 		}
+		if (wallHitNormalSteepness < 0.9 * Mathf.Pi/2 )
+		{
+			return;
+		}
+		if(ledgeRayCast.GetCollisionNormal() == Vector3.Zero)
+		{
+			return;
+		}
 		if (stepHeight < vaultMin || vaultMax < stepHeight)
 		{
 			return;
 		}
-		if (groundVelocity.LengthSquared() <= 0.01 && 0.37 < ledgeDistance)
+		if (groundSpeedSquared <= 0.01 && 0.37 < ledgeDistance)
 		{
 			return;
 		}
-		if (groundVelocity.LengthSquared() <= 9 && 0.5 < ledgeDistance)
+		if (groundSpeedSquared <= 9 && 0.5 < ledgeDistance)
 		{
 			return;
 		}	
-		if (groundVelocity.LengthSquared() <= 25 && 0.75 < ledgeDistance)
+		if (groundSpeedSquared <= 25 && 0.75 < ledgeDistance)
 		{
 			return;
 		}	
-		if (groundVelocity.LengthSquared() <= 64 && 1.25 < ledgeDistance)
+		if (groundSpeedSquared <= 64 && 1.25 < ledgeDistance)
 		{
 			return;
 		}
@@ -368,7 +416,7 @@ public partial class Player : CharacterBody3D
 			}
 			else if(vaultDetectionMode == VaultDetectionMode.canOnlyVaultCrouching)
 			{
-				if(rotationPitch > 0 || stepHeight < 0.6f)
+				if(lookRotationPitch > 0 || stepHeight < 0.6f)
 				{
 					return;
 				}
@@ -383,7 +431,15 @@ public partial class Player : CharacterBody3D
 				vaultingMachine.SetStateIfNotCurrentState(vaultingStandingToStandingState);
 			}
 		}
-		if (Velocity.Y < airVaultFallingMax)
+		if (stepHeight > airVaultMax)
+		{
+			return;
+		}
+		if (Velocity.Y < airVaultFallingMax )
+		{
+			return;
+		}
+		if(jumpingMachine.CurrentState() == "jumping" && (verticalDistanceJumped > 0.45))
 		{
 			return;
 		}
@@ -489,6 +545,7 @@ public partial class Player : CharacterBody3D
 	{
 		collisionCount = wallShapeCast.GetCollisionCount();
 		ledgeHit = ledgeRayCast.GetCollisionPoint();
+		upLedgeHit = upLedgeRayCast.GetCollisionPoint();
 
 		if (inputDirNorm != Vector3.Zero)
 		{
@@ -505,11 +562,15 @@ public partial class Player : CharacterBody3D
 		{
 			wallHit = wallShapeCast.GetCollisionPoint(collisionCount - 1);
 
-			if (!standingShapeCast.IsColliding())
+			wallHitNormal = wallShapeCast.GetCollisionNormal(collisionCount - 1);
+
+			wallHitNormalSteepness = Vector3.Up.AngleTo(wallHitNormal);
+
+			if (!standingShapeCast.IsColliding() && upLedgeGap >= standingShapeCastShapeHeight )
 			{
 				vaultDetectionMode = VaultDetectionMode.canVault;
 			}
-			else if (!crouchingShapeCast.IsColliding())
+			else if (!crouchingShapeCast.IsColliding() && upLedgeGap >= crouchingShapeCastShapeHeight )
 			{
 				vaultDetectionMode = VaultDetectionMode.canOnlyVaultCrouching;
 			}
@@ -531,8 +592,11 @@ public partial class Player : CharacterBody3D
 			ledgeDetector.GlobalPosition = wallHit + (standingShapeCastShapeHeight * Vector3.Up) - wallIndicatorDirection * ledgeDetectorTolerance;
 			ledgeIndicator.GlobalPosition = ledgeHit;
 
-			standingShapeCast.GlobalPosition = ledgeHit + (ledgeDetectorTolerance + standingShapeCastOriginOffset) * Vector3.Up;
-			crouchingShapeCast.GlobalPosition = ledgeHit  + (ledgeDetectorTolerance + crouchingShapeCastOriginOffset) * Vector3.Up;
+			upLedgeIndicator.GlobalPosition = upLedgeHit;
+
+			standingShapeCast.GlobalPosition = ledgeHit + (standingShapeCastOriginOffset + ledgeDetectorTolerance) * Vector3.Up;
+			crouchingShapeCast.GlobalPosition = ledgeHit  + (crouchingShapeCastOriginOffset + ledgeDetectorTolerance) * Vector3.Up;
+			upLedgeRayCast.GlobalPosition = ledgeHit + ( - ledgeDetectorTolerance) * Vector3.Up;
 
 			if (ledgeRayCast.IsColliding())
 			{
@@ -541,12 +605,22 @@ public partial class Player : CharacterBody3D
 				ledgeDirection = new Vector3 (ledgeDirection.X, 0, ledgeDirection.Z);
 				ledgeDistance = ledgeDirection.Length();
 				ledgeDirection = ledgeDirection.Normalized();
+
+				if(upLedgeRayCast.IsColliding())
+				{
+					upLedgeGap = upLedgeIndicator.GlobalPosition.Y - ledgeIndicator.GlobalPosition.Y;
+				}
+				else
+				{
+					upLedgeGap = standingShapeCastShapeHeight;
+				}
 			}
 		}
 		else
 		{
 			stepHeight = 0f;
 			ledgeDistance = 1f;
+			wallHitNormalSteepness = 0f;
 			vaultDetectionMode = VaultDetectionMode.cannotVault;
 		}
 	}
@@ -560,28 +634,40 @@ public partial class Player : CharacterBody3D
 
 	public void UpdateCollisionShapePosition(double delta)
 	{		
+		var upperCollisionShapePosition = upperCollisionShape.Position;
+		upperCollisionShapePosition = upperCollisionShapePosition.Lerp(upperCollisionShapeDesiredPosition, (float)delta * lerpCurrentHeightSpeed);
+		upperCollisionShape.Position = upperCollisionShapePosition;
+
 		var lowerCollisionShapePosition = lowerCollisionShape.Position;
 		lowerCollisionShapePosition = lowerCollisionShapePosition.Lerp(lowerCollisionShapeDesiredPosition, (float)delta * lerpCurrentHeightSpeed);
 		lowerCollisionShapePosition= lowerCollisionShapePosition.Clamp(new Vector3 (0, 0.5f, 0),new Vector3 (0, 1.3f, 0));
 		lowerCollisionShape.Position = lowerCollisionShapePosition;
 
 		wallShapeCast.Position = lowerCollisionShape.Position + new Vector3(0, wallShapeCastOriginOffset - lowerCollisionShapeOriginOffset, 0);
-
-		var upperCollisionShapePosition = upperCollisionShape.Position;
-		upperCollisionShapePosition = upperCollisionShapePosition.Lerp(upperCollisionShapeDesiredPosition, (float)delta * lerpCurrentHeightSpeed);
-		upperCollisionShape.Position = upperCollisionShapePosition;
 	}
 
 	public void SetDesiredPositionStanding()
 	{
-		lowerCollisionShapeDesiredPosition = new Vector3 (0, lowerCollisionShapeOriginOffset, 0);
 		upperCollisionShapeDesiredPosition = new Vector3 (0, 0.8f + upperCollisionShapeOriginOffset, 0);
+		lowerCollisionShapeDesiredPosition = new Vector3 (0, lowerCollisionShapeOriginOffset, 0);
 	}
 
 	public void SetDesiredPositionCrouching()
 	{
-		lowerCollisionShapeDesiredPosition = new Vector3 (0, lowerCollisionShapeOriginOffset, 0);
 		upperCollisionShapeDesiredPosition = new Vector3 (0, 0.2f + upperCollisionShapeOriginOffset, 0);
+		lowerCollisionShapeDesiredPosition = new Vector3 (0, lowerCollisionShapeOriginOffset, 0);
+	}
+
+	public void SetDesiredPositionSliding()
+	{
+		upperCollisionShapeDesiredPosition = new Vector3 (0, upperCollisionShapeOriginOffset, 0);
+		lowerCollisionShapeDesiredPosition = new Vector3 (0, lowerCollisionShapeOriginOffset, 0);
+	}
+
+	public void SetDesiredPositionTucking()
+	{
+		upperCollisionShapeDesiredPosition = new Vector3 (0 , 0.8f + upperCollisionShapeOriginOffset, 0);
+		lowerCollisionShapeDesiredPosition = new Vector3 (0, 0.6f + lowerCollisionShapeOriginOffset , 0);
 	}
 	public void UpdateCrouching(double delta)
 	{
@@ -612,8 +698,7 @@ public partial class Player : CharacterBody3D
 	}
 	public void OnEnterSliding()
 	{
-		lowerCollisionShapeDesiredPosition = new Vector3 (0, lowerCollisionShapeOriginOffset, 0);
-		upperCollisionShapeDesiredPosition = new Vector3 (0, upperCollisionShapeOriginOffset, 0);
+		SetDesiredPositionSliding();
 
 		lastlerpInputDir = lerpInputDir;
 
@@ -636,6 +721,15 @@ public partial class Player : CharacterBody3D
 		pertubateMovement = Vector3.Zero;		
 	}
 
+	public void UpdateTucking(double delta)
+	{
+		UpdateCollisionShapePosition(delta);
+	}
+
+	public void OnEnterTucking()
+	{
+		SetDesiredPositionTucking();
+	}
 	public void UpdateWalking(double delta)
 	{
 		UpdateCollisionShapePosition(delta);
@@ -676,7 +770,7 @@ public partial class Player : CharacterBody3D
 
 		movementBoost = movementBoost.Lerp(Vector3.Zero , (float)delta * lerpMovementBoost);
 
-		if (groundVelocity.LengthSquared() <= 18)
+		if (groundSpeedSquared <= 18)
 		{
 			pertubateMovement = Transform.Basis * lerpInputDir * pertubateRatio;
 		}
@@ -723,11 +817,13 @@ public partial class Player : CharacterBody3D
 	}
 	public void UpdateJumping(double delta)
 	{
+		verticalDistanceJumped = startingJumpPosition - GlobalPosition.Y;
+		
 		rotatedLerpInput = lastRotatedLerp;
 
 		movementBoost = movementBoost.Lerp(Vector3.Zero , (float)delta * lerpMovementBoost);
 
-		if (groundVelocity.LengthSquared() <= 18 )
+		if (groundSpeedSquared <= 18 )
 		{
 			pertubateMovement = Transform.Basis * lerpInputDir * pertubateRatio;
 		}
@@ -736,15 +832,22 @@ public partial class Player : CharacterBody3D
 	{
 		lastVelocity.Y += Mathf.Sqrt(2 * fallgravity * fallRatio * playerJumpHeight);
 		//neckAnimationPlayer.Play("jump");
+		verticalDistanceJumped = 0;
+		startingJumpPosition = GlobalPosition.Y;
 
 		rotatedLerpInput = Transform.Basis * lerpInputDir;
 
 		lastRotatedLerp = rotatedLerpInput;
 
-		if (groundVelocity.LengthSquared() <= 18 && inputDirNorm == Vector3.Forward && movementMachine.CurrentState() != "crouching" && movementMachine.CurrentState() != "sliding")
+		if (groundSpeedSquared <= 18 && inputDirNorm == Vector3.Forward && movementMachine.CurrentState() != "crouching" && movementMachine.CurrentState() != "sliding")
 		{
 			movementBoost = Transform.Basis * lerpInputDir * movementBoostAmount;
 		}
+	}
+
+	public void OnExitJumping()
+	{
+		verticalDistanceJumped = 0;
 	}
 	public void UpdateVaultingStandingToStanding(double delta)
 	{
@@ -801,7 +904,7 @@ public partial class Player : CharacterBody3D
 		}
 	}
 
-	public void OnEnterCrouchingToCrouching()
+	public void OnEnterVaultingCrouchingToCrouching()
 	{
 		vaultingFreezeMovementMachine = true;
 
@@ -812,20 +915,21 @@ public partial class Player : CharacterBody3D
 		}
 		else
 		{
-			vaultStoredRotatedLerp = Transform.Basis * (0.5f * Vector3.Forward);
+			vaultStoredRotatedLerp = Transform.Basis * (0.8f * Vector3.Forward);
 			vaultStoredInputDirection = 0.8f * Vector3.Forward;
 		}
 		
-		vaultJumpHeight = stepHeight - 0.2f;
+
+		vaultJumpHeight = (float)Mathf.Max(stepHeight - 0.2, stepHeight/2);
 		lastVelocity.Y += Mathf.Sqrt(2 * fallgravity * fallRatio * vaultJumpHeight);
-		
+
 		var stepUp = stepHeight - vaultJumpHeight;
 
 		lowerCollisionShapeDesiredPosition = new Vector3 (0, lowerCollisionShapeOriginOffset + stepUp, 0);
 		lowerCollisionShape.Position = lowerCollisionShapeDesiredPosition;
 	}
 
-	public void OnExitCrouchingToCrouching()
+	public void OnExitVaultingCrouchingToCrouching()
 	{
 		vaultingFreezeMovementMachine = false;
 
@@ -845,7 +949,7 @@ public partial class Player : CharacterBody3D
 			vaultingMachine.SetStateIfNotCurrentState(notVaultingState);
 		}
 	}
-	public void OnEnterStandingToCrouching() 
+	public void OnEnterVaultingStandingToCrouching() 
 	{
 		vaultingFreezeMovementMachine = true;
 
@@ -860,7 +964,7 @@ public partial class Player : CharacterBody3D
 			vaultStoredInputDirection = 0.8f * Vector3.Forward;
 		}
 		
-		vaultJumpHeight = stepHeight/2;
+		vaultJumpHeight = stepHeight/4;
 		lastVelocity.Y += Mathf.Sqrt(2 * fallgravity * fallRatio * vaultJumpHeight);
 		
 		var stepUp = stepHeight - vaultJumpHeight;
@@ -870,7 +974,7 @@ public partial class Player : CharacterBody3D
 
 		upperCollisionShapeDesiredPosition = lowerCollisionShapeDesiredPosition + new Vector3(0, 0.2f, 0);
 	}
-	public void OnExitStandingToCrouching() 	
+	public void OnExitVaultingStandingToCrouching() 	
 	{
 		vaultingFreezeMovementMachine = false;
 
@@ -885,13 +989,14 @@ public partial class Player : CharacterBody3D
 	{
 		rotatedLerpInput = 0.8f * vaultStoredRotatedLerp;
 
+
 		if(Velocity.Y <= 0)
 		{
 			jumpingMachine.SetStateIfNotCurrentState(fallingState);
 
 			SetDesiredPositionStanding();
 		}
-		if(IsOnFloor() && Velocity.Y <= 0)
+		if(IsOnFloor() && Velocity.Y <= 0 )
 		{
 			vaultingMachine.SetStateIfNotCurrentState(notVaultingState);
 		}
@@ -910,10 +1015,10 @@ public partial class Player : CharacterBody3D
 			vaultStoredRotatedLerp = Transform.Basis * (0.5f * Vector3.Forward);
 			vaultStoredInputDirection = 0.8f * Vector3.Forward;
 		}
-
-		lastVelocity.Y += 0.2f * lastVelocity.Y + 2f;
 		
-		var stepUp = stepHeight + vaultStepUpTolerance;
+		var stepUp = (stepHeight + vaultStepUpTolerance)/2;
+
+		lastVelocity.Y = Mathf.Sqrt(2 * fallgravity * fallRatio * stepUp);
 
 		lowerCollisionShapeDesiredPosition = new Vector3 (0, lowerCollisionShapeOriginOffset + stepUp, 0);
 		lowerCollisionShape.Position = lowerCollisionShapeDesiredPosition;
@@ -939,4 +1044,3 @@ public partial class Player : CharacterBody3D
 		SetDesiredPositionStanding();
 	}
 }
-
