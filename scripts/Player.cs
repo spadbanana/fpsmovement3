@@ -52,6 +52,7 @@ public partial class Player : CharacterBody3D
 	public State vaultingStandingToCrouchingState { get; private set; }
 	public State vaultingCrouchingToCrouchingState { get; private set; }
 	public State airVaulting { get; private set; }
+	public State airVaultingtoCrouch { get; private set;}
 
 	private enum VaultDetectionMode 
 	{
@@ -200,6 +201,7 @@ public partial class Player : CharacterBody3D
 		vaultingStandingToCrouchingState = vaultingMachine.CreateState(UpdateVaultingStandingToCrouching, OnEnterVaultingStandingToCrouching, OnExitVaultingStandingToCrouching, "vaultingStandingToCrouching");
 		vaultingCrouchingToCrouchingState = vaultingMachine.CreateState(UpdateVaultingCrouchingToCrouching, OnEnterVaultingCrouchingToCrouching, OnExitVaultingCrouchingToCrouching, "vaultingCrouchingToCrouching");
 		airVaulting = vaultingMachine.CreateState(UpdateAirVaulting, OnEnterAirVaulting, OnExitAirVaulting, "airVaulting");
+		airVaultingtoCrouch = vaultingMachine.CreateState(UpdateAirVaultingToCrouch, OnEnterAirVaultingToCrouch, OnExitAirVaultingToCrouch, "airVaultingToCrouch");
 		
 		movementMachine.SetState(runningState);
 		jumpingMachine.SetState(fallingState);
@@ -360,7 +362,7 @@ public partial class Player : CharacterBody3D
 	}
 	public void SetVaultingMode()
 	{
-		// if(!jumpNextPhysicsProcess || !airJumpNextPhysicsProcess)
+		// if(!jumpNextPhysicsProcess || !airVaultNextPhysicsProcess) this never works idk why
 		// {
 		// 	return;
 		// }
@@ -449,7 +451,11 @@ public partial class Player : CharacterBody3D
 		}
 		if(airVaultNextPhysicsProcess && jumpingMachine.CurrentState() == "jumping")
 		{
-			if (vaultDetectionMode == VaultDetectionMode.canVault)
+			if (vaultDetectionMode == VaultDetectionMode.canOnlyVaultCrouching)
+			{
+				vaultingMachine.SetStateIfNotCurrentState(airVaultingtoCrouch);
+			}
+			else if (vaultDetectionMode == VaultDetectionMode.canVault)
 			{
 				vaultingMachine.SetStateIfNotCurrentState(airVaulting);
 			}
@@ -964,7 +970,7 @@ public partial class Player : CharacterBody3D
 			vaultStoredInputDirection = 0.8f * Vector3.Forward;
 		}
 		
-		vaultJumpHeight = stepHeight/4;
+		vaultJumpHeight = stepHeight/2;
 		lastVelocity.Y += Mathf.Sqrt(2 * fallgravity * fallRatio * vaultJumpHeight);
 		
 		var stepUp = stepHeight - vaultJumpHeight;
@@ -1042,5 +1048,65 @@ public partial class Player : CharacterBody3D
 		}
 
 		SetDesiredPositionStanding();
+	}
+	public void UpdateAirVaultingToCrouch(double delta)
+	{
+		rotatedLerpInput = 0.8f * vaultStoredRotatedLerp;
+
+
+		if(Velocity.Y <= 0)
+		{
+			jumpingMachine.SetStateIfNotCurrentState(fallingState);
+
+			SetDesiredPositionCrouching();
+		}
+		if(IsOnFloor() && Velocity.Y <= 0 )
+		{
+			vaultingMachine.SetStateIfNotCurrentState(notVaultingState);
+		}
+	}
+	public void OnEnterAirVaultingToCrouch()
+	{
+		vaultingFreezeMovementMachine = true;
+
+		if(inputDir != Vector2.Zero)
+		{
+			vaultStoredRotatedLerp = (float)Mathf.Max(rotatedLerpInput.Length(), 0.5f) * rotatedLerpInput.Normalized();
+			vaultStoredInputDirection = (float)Mathf.Max(lerpInputDir.Length(), 0.8f) * lerpInputDir.Normalized();
+		}
+		else
+		{
+			vaultStoredRotatedLerp = Transform.Basis * (0.5f * Vector3.Forward);
+			vaultStoredInputDirection = 0.8f * Vector3.Forward;
+		}
+		
+		var stepUp = (stepHeight + vaultStepUpTolerance)/2;
+
+		lastVelocity.Y = Mathf.Sqrt(2 * fallgravity * fallRatio * stepUp);
+
+		lowerCollisionShapeDesiredPosition = new Vector3 (0, lowerCollisionShapeOriginOffset + stepUp, 0);
+		lowerCollisionShape.Position = lowerCollisionShapeDesiredPosition;
+
+		upperCollisionShapeDesiredPosition = lowerCollisionShapeDesiredPosition + new Vector3(0, 0.2f, 0);
+	}
+	public void OnExitAirVaultingToCrouch()
+	{
+		vaultingFreezeMovementMachine = false;
+
+		rotatedLerpInput = 0.8f * vaultStoredRotatedLerp;
+
+		lerpInputDir = vaultStoredInputDirection;
+
+		if (rotatedLerpInput.Normalized().Dot(lastRotatedLerp.Normalized()) <= 0.95 && inputDirNorm != Vector3.Zero)
+		{
+			lerpInputDir = 0.5f * vaultStoredInputDirection;
+		}
+
+		if (rotatedLerpInput.Normalized().Dot(lastRotatedLerp.Normalized()) <= 0.45 && inputDirNorm != Vector3.Zero)
+		{
+			lerpInputDir = Vector3.Zero;
+		}
+
+		SetDesiredPositionCrouching();
 	}
 }

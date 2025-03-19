@@ -7,7 +7,7 @@ On aur vault and normal vault lower hitbox too high each time  **DONE****DONE**
 
 make crouch into slide only on press not auto crouch **DONE******
 
-%%%%%%%%%%%%REFACTOR VAULT CHECK TO MAKE FASTER%%%%%%%%%   ??????
+	%%%%%%%%%%%%REFACTOR VAULT CHECK TO MAKE FASTER%%%%%%%%%   ??????
 
 ALL VAULTTOCROUCH CROUCHTOCROUCHBUGS  ****done****
 make vaultinto crouch mostly step up and not jump  ***done***
@@ -22,13 +22,14 @@ treat steep objects like wall *****done*****
 
 recrouching tuck loop when jumping shouldntwork *****done*****
 
-VAULTTOSTEEP
-vaultonto steep objects
+VAULTTOSTEEP *****done****
+vaultonto steep objects *****done****
 
-airvaulttocrouch
+airvaulttocrouch  ***********done***********
 
-AUTOSTEP crouching and standing
-for steps not tall enough for vault auto step (>0.15 <0.3 
+    need to playtest vault for bugs  ####headcanclipintoceilingeasydonothing####
+
+AUTOSTEP crouching and standing for steps not tall enough for vault auto step (>0.15 <0.3 
 
 sprint to button and walk to other button
 
